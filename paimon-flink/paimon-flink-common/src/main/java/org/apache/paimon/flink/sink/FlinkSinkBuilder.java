@@ -82,6 +82,7 @@ public class FlinkSinkBuilder {
 
     private DataStream<RowData> input;
     @Nullable protected Map<String, String> overwritePartition;
+    @Nullable protected Long overwriteBaseSnapshotId;
     @Nullable private Integer parallelism;
     @Nullable private TableSortInfo tableSortInfo;
 
@@ -128,6 +129,12 @@ public class FlinkSinkBuilder {
     /** INSERT OVERWRITE PARTITION (...). */
     public FlinkSinkBuilder overwrite(Map<String, String> overwritePartition) {
         this.overwritePartition = overwritePartition;
+        return this;
+    }
+
+    /** Set the base snapshot for overwrite conflict detection (used by sort compact). */
+    public FlinkSinkBuilder withOverwriteBaseSnapshot(@Nullable Long snapshotId) {
+        this.overwriteBaseSnapshotId = snapshotId;
         return this;
     }
 

@@ -412,7 +412,8 @@ public class FileStoreCommitImpl implements FileStoreCommit {
     public int overwritePartition(
             Map<String, String> partition,
             ManifestCommittable committable,
-            Map<String, String> properties) {
+            Map<String, String> properties,
+            @Nullable Long baseSnapshotId) {
         LOG.info(
                 "Ready to overwrite to table {}, number of commit messages: {}",
                 tableName,
@@ -736,6 +737,8 @@ public class FileStoreCommitImpl implements FileStoreCommit {
      *
      * @param partitionFilter Partition filter indicating which partitions to overwrite, if {@code
      *     null}, overwrites the entire table.
+     * @param baseSnapshotId If non-null, build DELETE list from this snapshot instead of the
+     *     latest. Concurrent writes between this snapshot and the latest are detected as conflicts.
      */
     private int tryOverwritePartition(
             @Nullable PartitionPredicate partitionFilter,

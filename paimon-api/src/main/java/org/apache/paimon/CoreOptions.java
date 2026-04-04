@@ -3298,6 +3298,10 @@ public class CoreOptions implements Serializable {
         return options.get(DYNAMIC_PARTITION_OVERWRITE);
     }
 
+    public boolean sortCompactSkipOverwriteConflictDetection() {
+        return options.get(SORT_COMPACT_SKIP_OVERWRITE_CONFLICT_DETECTION);
+    }
+
     public Duration partitionExpireTime() {
         return options.get(PARTITION_EXPIRATION_TIME);
     }

@@ -637,8 +637,8 @@ public class CompactProcedure extends BaseProcedure {
                         .orElse(null);
         if (datasetForWrite != null) {
             PaimonSparkWriter writer = PaimonSparkWriter.apply(table);
-            // Use dynamic partition overwrite
             writer.writeBuilder().withOverwrite();
+            writer.withOverwriteBaseSnapshot(readSnapshotId);
             writer.commit(writer.write(datasetForWrite));
         }
     }
