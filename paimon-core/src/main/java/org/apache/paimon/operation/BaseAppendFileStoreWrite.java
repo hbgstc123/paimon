@@ -21,6 +21,7 @@ package org.apache.paimon.operation;
 import org.apache.paimon.AppendOnlyFileStore;
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.append.AppendOnlyWriter;
+import org.apache.paimon.append.ParquetFastPathCompactRewriter;
 import org.apache.paimon.append.cluster.Sorter;
 import org.apache.paimon.compact.CompactManager;
 import org.apache.paimon.data.BinaryRow;
@@ -35,6 +36,8 @@ import org.apache.paimon.io.BundleRecords;
 import org.apache.paimon.io.DataFileMeta;
 import org.apache.paimon.io.RowDataRollingFileWriter;
 import org.apache.paimon.manifest.FileSource;
+import org.apache.paimon.metrics.MetricRegistry;
+import org.apache.paimon.operation.metrics.CompactionFastPathMetrics;
 import org.apache.paimon.reader.RecordReaderIterator;
 import org.apache.paimon.statistics.SimpleColStatsCollector;
 import org.apache.paimon.types.RowType;
@@ -80,6 +83,7 @@ public abstract class BaseAppendFileStoreWrite extends MemoryFileStoreWrite<Inte
     private final RowType rowType;
 
     private @Nullable BlobFileContext blobContext;
+    private @Nullable CompactionFastPathMetrics compactionFastPathMetrics;
     private RowType writeType;
     private @Nullable List<String> writeCols;
     private boolean forceBufferSpill = false;
@@ -114,6 +118,13 @@ public abstract class BaseAppendFileStoreWrite extends MemoryFileStoreWrite<Inte
         if (blobContext != null) {
             blobContext = blobContext.withBlobConsumer(blobConsumer);
         }
+        return this;
+    }
+
+    @Override
+    public BaseAppendFileStoreWrite withMetricRegistry(MetricRegistry metricRegistry) {
+        super.withMetricRegistry(metricRegistry);
+        compactionFastPathMetrics = new CompactionFastPathMetrics(metricRegistry, tableName);
         return this;
     }
 
@@ -194,6 +205,24 @@ public abstract class BaseAppendFileStoreWrite extends MemoryFileStoreWrite<Inte
             throws Exception {
         if (toCompact.isEmpty()) {
             return Collections.emptyList();
+        }
+        if (options.appendCompactionRowGroupCopyEnabled()) {
+            List<DataFileMeta> fastPath =
+                    ParquetFastPathCompactRewriter.tryRewrite(
+                            fileIO,
+                            fileFormat,
+                            writeType,
+                            options,
+                            partition,
+                            bucket,
+                            dvFactory,
+                            toCompact,
+                            pathFactory.createDataFilePathFactory(partition, bucket),
+                            schemaId,
+                            compactionFastPathMetrics);
+            if (fastPath != null) {
+                return fastPath;
+            }
         }
         Exception collectedExceptions = null;
         RowDataRollingFileWriter rewriter =

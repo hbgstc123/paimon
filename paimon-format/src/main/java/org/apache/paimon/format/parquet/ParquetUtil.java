@@ -68,7 +68,12 @@ public class ParquetUtil {
      * @return result sets as map, key is column name, value is statistics
      */
     public static Map<String, Statistics<?>> extractColumnStats(ParquetMetadata parquetMetadata) {
-        List<BlockMetaData> blockMetaDataList = parquetMetadata.getBlocks();
+        return extractColumnStatsFromBlocks(parquetMetadata.getBlocks());
+    }
+
+    /** Extract and merge column stats from the given RowGroups. */
+    public static Map<String, Statistics<?>> extractColumnStatsFromBlocks(
+            List<BlockMetaData> blockMetaDataList) {
         Map<String, Statistics<?>> resultStats = new HashMap<>();
         for (BlockMetaData blockMetaData : blockMetaDataList) {
             List<ColumnChunkMetaData> columnChunkMetaDataList = blockMetaData.getColumns();
