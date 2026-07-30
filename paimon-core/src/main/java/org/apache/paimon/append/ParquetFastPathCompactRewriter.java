@@ -43,16 +43,17 @@ import org.apache.paimon.types.RowType;
 import org.apache.paimon.utils.LongCounter;
 import org.apache.paimon.utils.Pair;
 
-import org.apache.parquet.column.Encoding;
-import org.apache.parquet.column.ParquetProperties;
-import org.apache.parquet.hadoop.ParquetFileReader;
-import org.apache.parquet.hadoop.ParquetOutputFormat;
-import org.apache.parquet.hadoop.metadata.BlockMetaData;
-import org.apache.parquet.hadoop.metadata.ColumnChunkMetaData;
-import org.apache.parquet.hadoop.metadata.CompressionCodecName;
-import org.apache.parquet.hadoop.metadata.FileMetaData;
-import org.apache.parquet.hadoop.metadata.ParquetMetadata;
-import org.apache.parquet.schema.MessageType;
+import org.apache.paimon.shade.org.apache.parquet.column.Encoding;
+import org.apache.paimon.shade.org.apache.parquet.column.ParquetProperties;
+import org.apache.paimon.shade.org.apache.parquet.hadoop.ParquetFileReader;
+import org.apache.paimon.shade.org.apache.parquet.hadoop.ParquetOutputFormat;
+import org.apache.paimon.shade.org.apache.parquet.hadoop.metadata.BlockMetaData;
+import org.apache.paimon.shade.org.apache.parquet.hadoop.metadata.ColumnChunkMetaData;
+import org.apache.paimon.shade.org.apache.parquet.hadoop.metadata.CompressionCodecName;
+import org.apache.paimon.shade.org.apache.parquet.hadoop.metadata.FileMetaData;
+import org.apache.paimon.shade.org.apache.parquet.hadoop.metadata.ParquetMetadata;
+import org.apache.paimon.shade.org.apache.parquet.schema.MessageType;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -90,10 +91,17 @@ public class ParquetFastPathCompactRewriter {
             DataFilePathFactory pathFactory,
             long schemaId,
             @Nullable CompactionFastPathMetrics metrics) {
-        long start = System.nanoTime();
+        long startNanos = System.nanoTime();
+        long inputBytes = toCompact.stream().mapToLong(DataFileMeta::fileSize).sum();
+        long inputRows = toCompact.stream().mapToLong(DataFileMeta::rowCount).sum();
         try {
             if (dvFactory != null) {
-                reportMiss(metrics, MissReason.DV);
+                reportMiss(
+                        metrics,
+                        MissReason.DV,
+                        String.format(
+                                "inputFiles=%d, inputRows=%d, inputBytes=%d",
+                                toCompact.size(), inputRows, inputBytes));
                 return null;
             }
 
@@ -105,7 +113,12 @@ public class ParquetFastPathCompactRewriter {
             MissReason tableMiss =
                     checkTableLevel(options, fileFormat, bucket, expectedValueStatsCols, toCompact);
             if (tableMiss != null) {
-                reportMiss(metrics, tableMiss);
+                reportMiss(
+                        metrics,
+                        tableMiss,
+                        String.format(
+                                "bucket=%d, fileFormat=%s, inputFiles=%d",
+                                bucket, options.fileFormatString(), toCompact.size()));
                 return null;
             }
 
@@ -114,7 +127,12 @@ public class ParquetFastPathCompactRewriter {
                 DataFileMeta file = toCompact.get(i);
                 MissReason fileMiss = checkFileLevel(file, schemaId, expectedValueStatsCols);
                 if (fileMiss != null) {
-                    reportMiss(metrics, fileMiss);
+                    reportMiss(
+                            metrics,
+                            fileMiss,
+                            String.format(
+                                    "file=%s, fileIndex=%d, schemaId=%d",
+                                    file.fileName(), i, file.schemaId()));
                     return null;
                 }
                 Path filePath = pathFactory.toPath(file);
@@ -131,7 +149,12 @@ public class ParquetFastPathCompactRewriter {
                                     expectedCodec,
                                     preparedInputs.isEmpty() ? null : preparedInputs.get(0).codec);
                     if (footerMiss != null) {
-                        reportMiss(metrics, footerMiss);
+                        reportMiss(
+                                metrics,
+                                footerMiss,
+                                String.format(
+                                        "file=%s, fileIndex=%d, expectedCodec=%s",
+                                        file.fileName(), i, expectedCodec));
                         return null;
                     }
                     CompressionCodecName codec =
@@ -142,7 +165,9 @@ public class ParquetFastPathCompactRewriter {
                 }
             }
 
-            long inputBytes = toCompact.stream().mapToLong(DataFileMeta::fileSize).sum();
+            long prepareMs = elapsedMillis(startNanos);
+            int inputRowGroups =
+                    preparedInputs.stream().mapToInt(input -> input.blocks.size()).sum();
             List<ParquetRowGroupCopier.Input> copierInputs = new ArrayList<>(preparedInputs.size());
             for (PreparedInput preparedInput : preparedInputs) {
                 copierInputs.add(
@@ -158,8 +183,11 @@ public class ParquetFastPathCompactRewriter {
                             pathFactory::newPath,
                             options.toConfiguration(),
                             options.appendCompactionRowGroupCopyPreservePageIndex());
+            long copyStartNanos = System.nanoTime();
             List<ParquetRowGroupCopier.OutputFile> copiedFiles = copier.copy(copierInputs);
+            long copyMs = elapsedMillis(copyStartNanos);
             try {
+                long buildStartNanos = System.nanoTime();
                 List<DataFileMeta> result =
                         buildResult(
                                 copiedFiles,
@@ -170,27 +198,50 @@ public class ParquetFastPathCompactRewriter {
                                 expectedValueStatsCols,
                                 options,
                                 pathFactory);
+                long buildResultMs = elapsedMillis(buildStartNanos);
+                long outputBytes = result.stream().mapToLong(DataFileMeta::fileSize).sum();
+                long outputRows = result.stream().mapToLong(DataFileMeta::rowCount).sum();
                 if (metrics != null) {
                     metrics.reportHit();
                 }
                 LOG.info(
-                        "Append compaction fast path succeeded: inputFiles={}, inputBytes={}, "
-                                + "outputFiles={}, elapsedMs={}",
+                        "Append compaction fast path succeeded: inputFiles={}, inputRows={}, "
+                                + "inputBytes={}, inputRowGroups={}, outputFiles={}, outputRows={}, "
+                                + "outputBytes={}, prepareMs={}, copyMs={}, buildResultMs={}, "
+                                + "totalMs={}, preservePageIndex={}",
                         toCompact.size(),
+                        inputRows,
                         inputBytes,
+                        inputRowGroups,
                         result.size(),
-                        (System.nanoTime() - start) / 1_000_000);
+                        outputRows,
+                        outputBytes,
+                        prepareMs,
+                        copyMs,
+                        buildResultMs,
+                        elapsedMillis(startNanos),
+                        options.appendCompactionRowGroupCopyPreservePageIndex());
                 return result;
             } catch (IOException | RuntimeException e) {
                 cleanupCopiedFiles(fileIO, copiedFiles);
                 throw e;
             }
         } catch (IOException e) {
-            reportMiss(metrics, MissReason.IO_ERROR);
+            reportMiss(
+                    metrics,
+                    MissReason.IO_ERROR,
+                    String.format(
+                            "inputFiles=%d, inputRows=%d, inputBytes=%d, error=%s",
+                            toCompact.size(), inputRows, inputBytes, e.toString()));
             LOG.info("Append compaction fast path failed with IO error, fallback to rewrite", e);
             return null;
         } catch (RuntimeException e) {
-            reportMiss(metrics, MissReason.IO_ERROR);
+            reportMiss(
+                    metrics,
+                    MissReason.IO_ERROR,
+                    String.format(
+                            "inputFiles=%d, inputRows=%d, inputBytes=%d, error=%s",
+                            toCompact.size(), inputRows, inputBytes, e.toString()));
             LOG.info("Append compaction fast path failed, fallback to rewrite", e);
             return null;
         }
@@ -402,8 +453,7 @@ public class ParquetFastPathCompactRewriter {
             String expectedCodec,
             @Nullable CompressionCodecName referenceCodec) {
         FileMetaData fileMetaData = footer.getFileMetaData();
-        if (fileMetaData.getEncryptionType()
-                != org.apache.parquet.hadoop.metadata.FileMetaData.EncryptionType.UNENCRYPTED) {
+        if (fileMetaData.getEncryptionType() != FileMetaData.EncryptionType.UNENCRYPTED) {
             return MissReason.ENCRYPTION;
         }
         if (hasParquetV2Encoding(footer)) {
@@ -499,11 +549,16 @@ public class ParquetFastPathCompactRewriter {
         return compression.toLowerCase();
     }
 
-    private static void reportMiss(@Nullable CompactionFastPathMetrics metrics, MissReason reason) {
+    private static void reportMiss(
+            @Nullable CompactionFastPathMetrics metrics, MissReason reason, String detail) {
         if (metrics != null) {
             metrics.reportMiss(reason);
         }
-        LOG.debug("Append compaction fast path miss: {}", reason);
+        LOG.info("Append compaction fast path miss: reason={}, {}", reason, detail);
+    }
+
+    private static long elapsedMillis(long startNanos) {
+        return (System.nanoTime() - startNanos) / 1_000_000;
     }
 
     private static final class PreparedInput {
