@@ -44,9 +44,9 @@ import java.util.Map;
 /** {@link Committer} for dynamic store. */
 public class StoreCommitter implements Committer<Committable, ManifestCommittable> {
 
-    protected final TableCommitImpl commit;
+    private final TableCommitImpl commit;
     @Nullable private final CommitterMetrics committerMetrics;
-    protected final CommitListeners commitListeners;
+    private final CommitListeners commitListeners;
     @Nullable private final IOManager commitIOManager;
     private final boolean allowLogOffsetDuplicate;
 
@@ -150,7 +150,7 @@ public class StoreCommitter implements Committer<Committable, ManifestCommittabl
         return allowLogOffsetDuplicate;
     }
 
-    protected void calcNumBytesAndRecordsOut(List<ManifestCommittable> committables) {
+    private void calcNumBytesAndRecordsOut(List<ManifestCommittable> committables) {
         if (committerMetrics == null) {
             return;
         }
@@ -160,32 +160,25 @@ public class StoreCommitter implements Committer<Committable, ManifestCommittabl
         for (ManifestCommittable committable : committables) {
             List<CommitMessage> commitMessages = committable.fileCommittables();
             for (CommitMessage commitMessage : commitMessages) {
-                CommitMessageImpl impl = (CommitMessageImpl) commitMessage;
-                bytesOut += calcTotalFileSize(impl.newFilesIncrement().newFiles());
-                bytesOut += additionalBytesOut(impl);
-                recordsOut += calcTotalFileRowCount(impl.newFilesIncrement().newFiles());
-                recordsOut += additionalRecordsOut(impl);
+                long dataFileSizeInc =
+                        calcTotalFileSize(
+                                ((CommitMessageImpl) commitMessage).newFilesIncrement().newFiles());
+                long dataFileRowCountInc =
+                        calcTotalFileRowCount(
+                                ((CommitMessageImpl) commitMessage).newFilesIncrement().newFiles());
+                bytesOut += dataFileSizeInc;
+                recordsOut += dataFileRowCountInc;
             }
         }
         committerMetrics.increaseNumBytesOut(bytesOut);
         committerMetrics.increaseNumRecordsOut(recordsOut);
     }
 
-    /** Hook for subclasses to include extra output in committer metrics. */
-    protected long additionalBytesOut(CommitMessageImpl impl) {
-        return 0;
-    }
-
-    /** Hook for subclasses to include extra output in committer metrics. */
-    protected long additionalRecordsOut(CommitMessageImpl impl) {
-        return 0;
-    }
-
-    protected static long calcTotalFileSize(List<DataFileMeta> files) {
+    private static long calcTotalFileSize(List<DataFileMeta> files) {
         return files.stream().mapToLong(DataFileMeta::fileSize).reduce(Long::sum).orElse(0);
     }
 
-    protected static long calcTotalFileRowCount(List<DataFileMeta> files) {
+    private static long calcTotalFileRowCount(List<DataFileMeta> files) {
         return files.stream().mapToLong(DataFileMeta::rowCount).reduce(Long::sum).orElse(0);
     }
 }

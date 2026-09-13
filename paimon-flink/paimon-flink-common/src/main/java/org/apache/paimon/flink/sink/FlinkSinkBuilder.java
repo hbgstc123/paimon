@@ -90,7 +90,7 @@ public class FlinkSinkBuilder {
 
     private DataStream<RowData> input;
     @Nullable protected Map<String, String> overwritePartition;
-    @Nullable protected Integer parallelism;
+    @Nullable private Integer parallelism;
     @Nullable private TableSortInfo tableSortInfo;
     @Nullable private UriReaderFactory blobDescriptorReaderFactory;
 
@@ -393,7 +393,7 @@ public class FlinkSinkBuilder {
         }
     }
 
-    protected DataStreamSink<?> buildUnawareBucketSink(DataStream<InternalRow> input) {
+    private DataStreamSink<?> buildUnawareBucketSink(DataStream<InternalRow> input) {
         checkArgument(
                 table.primaryKeys().isEmpty(),
                 "Unaware bucket mode only works with append-only table for now.");
@@ -411,12 +411,9 @@ public class FlinkSinkBuilder {
             }
         }
 
-        return configureBlobDescriptorReaderFactory(createAppendTableSink()).sinkFrom(input);
-    }
-
-    /** Create the {@link RowAppendTableSink} for the unaware bucket mode. */
-    protected RowAppendTableSink createAppendTableSink() {
-        return new RowAppendTableSink(table, overwritePartition, parallelism);
+        return configureBlobDescriptorReaderFactory(
+                        new RowAppendTableSink(table, overwritePartition, parallelism))
+                .sinkFrom(input);
     }
 
     private <T extends FlinkSink<?>> T configureBlobDescriptorReaderFactory(T sink) {

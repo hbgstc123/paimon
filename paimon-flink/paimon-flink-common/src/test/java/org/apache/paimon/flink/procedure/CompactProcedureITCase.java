@@ -312,20 +312,24 @@ public class CompactProcedureITCase extends CatalogITCaseBase {
     // ----------------------- Sort Compact -----------------------
 
     @Test
-    public void testSortCompactForAppendTable() throws Exception {
+    public void testDynamicBucketSortCompact() throws Exception {
         ThreadLocalRandom random = ThreadLocalRandom.current();
         sql(
                 "CREATE TABLE T ("
-                        + " f0 BIGINT,"
+                        + " f0 BIGINT PRIMARY KEY NOT ENFORCED,"
                         + " f1 BIGINT,"
                         + " f2 BIGINT,"
                         + " f3 BIGINT,"
                         + " f4 STRING"
                         + ") WITH ("
                         + " 'write-only' = 'true',"
-                        + " 'bucket' = '-1',"
+                        + " 'dynamic-bucket.target-row-num' = '100',"
                         + " 'zorder.var-length-contribution' = '14'"
                         + ")");
+        boolean overwriteUpgrade = random.nextBoolean();
+        if (!overwriteUpgrade) {
+            sql("ALTER TABLE T SET ('overwrite-upgrade' = 'false')");
+        }
         FileStoreTable table = paimonTable("T");
 
         int commitTimes = 20;
@@ -351,17 +355,7 @@ public class CompactProcedureITCase extends CatalogITCaseBase {
         sql(
                 "CALL sys.compact(`table` => 'default.T', order_strategy => 'zorder', order_by => 'f2,f1')");
 
-        checkLatestSnapshot(table, 21, Snapshot.CommitKind.COMPACT);
-    }
-
-    @Test
-    public void testEmptySortCompactProcedure() throws Exception {
-        sql("CREATE TABLE T (f0 INT, f1 INT) WITH ('bucket' = '-1')");
-        FileStoreTable table = paimonTable("T");
-        tEnv.getConfig().set(TableConfigOptions.TABLE_DML_SYNC, true);
-        sql(
-                "CALL sys.compact(`table` => 'default.T', order_strategy => 'zorder', order_by => 'f0')");
-        Assertions.assertThat(table.snapshotManager().latestSnapshot()).isNull();
+        checkLatestSnapshot(table, 21, Snapshot.CommitKind.OVERWRITE);
     }
 
     // ----------------------- Minor Compact -----------------------
